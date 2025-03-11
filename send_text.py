@@ -80,7 +80,7 @@ def fetch_good_morning_text(api_key, recipient_name):
     """
     openai.api_key = api_key
     today_date = datetime.now().strftime("%Y-%m-%d")
-    themes = ["serendipity", "adventure", "Sun", "joy", "calm", "hope", "shine", "Brigh", "coffee"]
+    themes = ["serendipity", "adventure", "quote", "joy", "calm", "hope", "coffee", "Work"]
     theme_word = random.choice(themes)
     
     prompt_system = (
@@ -146,12 +146,12 @@ def main():
         description="Fetch and send a unique good morning message via WhatsApp."
     )
     parser.add_argument(
-        "--hour", type=int, default=13,
-        help="Hour (24-hour format) to send the message (default: 10)"
+        "--hour", type=int, default=8,
+        help="Hour (24-hour format) to send the message (default: 8)"
     )
     parser.add_argument(
-        "--minute", type=int, default=4, 
-        help="Minute to send the message (default: 48)"
+        "--minute", type=int, default=0, 
+        help="Minute to send the message (default: 0)"
     )
     args = parser.parse_args()
 
