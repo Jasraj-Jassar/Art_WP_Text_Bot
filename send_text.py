@@ -6,6 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import openai
 import pywhatkit
+import random
 
 # -------------------------------
 # Logging configuration
@@ -79,15 +80,21 @@ def fetch_good_morning_text(api_key, recipient_name):
     """
     openai.api_key = api_key
     today_date = datetime.now().strftime("%Y-%m-%d")
+    themes = ["serendipity", "adventure", "Sun", "joy", "calm", "hope", "shine", "Brigh", "coffee"]
+    theme_word = random.choice(themes)
     
     prompt_system = (
         "You are an assistant that generates original, natural, and non-inviting good morning messages "
         "with a subtle, light flirty tone. Do not ask the recipient out or suggest meeting up; focus solely on greeting the morning."
+        "You are an assistant that generates highly original and unexpected good morning messages with a subtle, super light flirty tone. "
+        "Avoid clichés, overused phrases, and common imagery. "
+        "Your responses should be surprising and creative without suggesting any invitations or overly sentimental language."
     )
     prompt_user = (
         f"Today is {today_date}. Start with exactly 'Доброго ранку {recipient_name},'. "
-        "Generate a one-sentence english good morning message that is genuine and original, "
-        "avoiding overused phrases, clichés, or simping language. Keep the tone friendly and add a simple smile emoji at the end."
+        f"Generate a single one-sentence english good morning message that is genuine and original, incorporating the theme {theme_word} in a subtle way.  "
+        "Message should look like a friend usning simple english not a monk, should not be more than one line"
+        "avoiding overused phrases, clichés, or simping language.Try to be more creative and Keep the tone friendly and add a simple smile emoji at the end."
     )
     
     try:
@@ -139,11 +146,11 @@ def main():
         description="Fetch and send a unique good morning message via WhatsApp."
     )
     parser.add_argument(
-        "--hour", type=int, default=10, 
+        "--hour", type=int, default=13,
         help="Hour (24-hour format) to send the message (default: 10)"
     )
     parser.add_argument(
-        "--minute", type=int, default=48, 
+        "--minute", type=int, default=4, 
         help="Minute to send the message (default: 48)"
     )
     args = parser.parse_args()
