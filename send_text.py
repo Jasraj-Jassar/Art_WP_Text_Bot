@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import logging
 import argparse
 from datetime import datetime
@@ -60,6 +61,36 @@ def load_recipient_name():
     return recipient_name
 
 # -------------------------------
+# Last Prompt Storage Functions
+# -------------------------------
+def load_last_prompts(file_path="three_last_used.json"):
+    """
+    Load the list of the last three generated messages (raw GPT output without prefix) from a JSON file.
+    Returns an empty list if the file doesn't exist or on error.
+    """
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except json.JSONDecodeError:
+            logging.warning("JSON decode error in three_last_used.json. Starting with an empty list.")
+    return []
+
+def update_last_prompts(new_message, file_path="three_last_used.json"):
+    """
+    Update the JSON file with the new generated raw message (without greeting prefix).
+    Only the last three messages are kept.
+    """
+    prompts = load_last_prompts(file_path)
+    if len(prompts) >= 3:
+        prompts = prompts[-2:]
+    prompts.append(new_message)
+    with open(file_path, "w") as f:
+        json.dump(prompts, f)
+
+# -------------------------------
 # Fetch Good Morning Message
 # -------------------------------
 def fetch_good_morning_text(api_key, recipient_name):
@@ -67,35 +98,41 @@ def fetch_good_morning_text(api_key, recipient_name):
     Fetch a unique, non-cliché good morning message using the OpenAI API.
     
     The prompt instructs the model to:
-      - Start with exactly "Доброго ранку, {recipient_name},"
       - Generate a one-sentence message that is natural, original, and subtly flirty.
       - Avoid clichéd phrases and any invitation to meet up.
+      - Consider previously generated messages (without the greeting prefix) so as to produce something new.
+    
+    Note: The greeting "Доброго ранку {recipient_name}," is now added permanently after generation.
     
     Args:
         api_key (str): The OpenAI API key.
         recipient_name (str): The name of the message recipient.
     
     Returns:
-        str: The generated good morning message, or None if an error occurs.
+        str: The complete good morning message with the permanent greeting prefixed,
+             or None if an error occurs.
     """
     openai.api_key = api_key
     today_date = datetime.now().strftime("%Y-%m-%d")
     themes = ["serendipity", "adventure", "quote", "joy", "calm", "hope", "coffee", "Work"]
     theme_word = random.choice(themes)
     
+    # Load last three generated messages if they exist.
+    last_messages = load_last_prompts()
+    
     prompt_system = (
-        "You are an assistant that generates original, natural, and non-inviting good morning messages "
-        "with a subtle, light flirty tone. Do not ask the recipient out or suggest meeting up; focus solely on greeting the morning."
-        "You are an assistant that generates highly original and unexpected good morning messages with a subtle, super light flirty tone. "
-        "Avoid clichés, overused phrases, and common imagery. "
-        "Your responses should be surprising and creative without suggesting any invitations or overly sentimental language."
+        "You are an assistant that generates original, natural, and non-inviting good morning messages."
     )
     prompt_user = (
-        f"Today is {today_date}. Start with exactly 'Доброго ранку {recipient_name},'. "
-        f"Generate a single one-sentence english good morning message that is genuine and original, incorporating the theme {theme_word} in a subtle way.  "
-        "Message should look like a friend usning simple english not a monk, should not be more than one line"
-        "avoiding overused phrases, clichés, or simping language.Try to be more creative and Keep the tone friendly and add a simple smile emoji at the end."
+        "Dont say good morning, just start with the line"
+        #f"Today is {today_date}. Generate a single one-sentence English good morning message that is genuine and original, subtly incorporating the theme {theme_word}. "
+        "The message should be in English, no more than one line, and avoid overused phrases, clichés, or simping language. "
     )
+    
+    if last_messages:
+        prompt_user += f"Please create a new message that is completely different from these focus on generating something new and way different please. Previously generated messages: {last_messages}.  "
+    
+    prompt_user += "Add a simple smile emoji at the end."
     
     try:
         response = openai.ChatCompletion.create(
@@ -105,9 +142,17 @@ def fetch_good_morning_text(api_key, recipient_name):
                 {"role": "user", "content": prompt_user}
             ]
         )
-        message = response.choices[0].message.content.strip()
+        # Retrieve the raw message from GPT (without the greeting prefix)
+        raw_message = response.choices[0].message.content.strip()
         logging.info("Successfully fetched the morning text.")
-        return message
+        
+        # Permanently add the greeting to the message for sending
+        final_message = f"Доброго ранку {recipient_name}, {raw_message}"
+        
+        # Update the stored prompts with the raw message only.
+        update_last_prompts(raw_message)
+        
+        return final_message
     except Exception as e:
         logging.error(f"Error fetching good morning text: {e}")
         return None
