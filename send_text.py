@@ -121,12 +121,14 @@ def fetch_good_morning_text(api_key, recipient_name):
     last_messages = load_last_prompts()
     
     prompt_system = (
-        "You are an assistant that generates original, natural, and non-inviting good morning messages."
+        "You are an genuine human that wishes his friend good morning messages."
     )
     prompt_user = (
+        "for example, Good morning! Hope your day starts off great. Morning! Wishing you a smooth and productive day.Hope you slept well. Let’s crush this day."
         "Dont say good morning, just start with the line"
-        #f"Today is {today_date}. Generate a single one-sentence English good morning message that is genuine and original, subtly incorporating the theme {theme_word}. "
-        "The message should be in English, no more than one line, and avoid overused phrases, clichés, or simping language. "
+        "For Example you can say i Hope You day goes well"
+        ##f"Today is {today_date}. Generate a single one-sentence English good morning message that is genuine and original, subtly incorporating the theme {theme_word}. "
+        "The message should be in English, no more than one line, and avoid overused phrases, clichés, or language. "
     )
     
     if last_messages:
