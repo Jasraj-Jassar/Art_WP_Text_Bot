@@ -1,12 +1,12 @@
-# Art_WP_Text_Bot 
+# Art_WP_Text_Bot
 
 ## Overview
-This Python script generates a unique, natural, and subtle good morning message using the OpenAI API, and schedules it to be sent via WhatsApp using pywhatkit. It is designed with robust error handling and logging to ensure reliability and maintainability.
+This Python script generates a unique, natural, and subtle good morning message using the OpenAI API and schedules it to be sent via WhatsApp using pywhatkit. It is designed with robust error handling and logging to ensure reliability and maintainability. In addition to loading sensitive data from an environment file, you can now also pass the recipient phone number and name as command-line arguments.
 
 ## Features
-- **Unique Message Generation:** Uses OpenAI's GPT model to create original good morning messages.
+- **Unique Message Generation:** Uses OpenAI's 4o mini GPT model to create original good morning messages.
 - **WhatsApp Scheduling:** Automatically schedules messages to be sent via WhatsApp.
-- **Secure Configuration:** Sensitive data is managed through an external `.env` file.
+- **Flexible Configuration:** Sensitive data can be managed via an external `.env` file or overridden directly by command-line arguments.
 - **Robust Logging:** Logs events and errors to both the console and a log file.
 
 ## Requirements
@@ -35,8 +35,8 @@ This Python script generates a unique, natural, and subtle good morning message 
    pip install openai pywhatkit python-dotenv
    ```
 
-4. **Create a `.env` File:**
-   In the root directory of the project, create a file named `.env` with the following content. You can use the commands below to quickly create it:
+4. **Create a `.env` File (Optional):**
+   If you prefer to use an environment file for the default configuration, create a file named `.env` in the project root with the following content:
 
    **On Linux/Mac:**
    ```bash
@@ -55,19 +55,22 @@ This Python script generates a unique, natural, and subtle good morning message 
    ```
 
 ## Usage
-Run the script via the command line. You can optionally specify the time to send the message using command-line arguments. For example:
+Run the script via the command line. You can optionally specify the scheduling time, recipient phone number, and recipient name using command-line arguments. For example:
 ```bash
-python send_text.py --hour 8 --minute 0
+python main.py --hour 8 --minute 0 --phone "+1234567890" --recipient "Alice"
 ```
-If no scheduling time is provided, the default is set to 8:00 AM (MST).
+- **--hour & --minute:** Set the time (24-hour format) to send the message (default is 8:00 AM).
+- **--phone & --recipient:** Override the default phone number and recipient name that would otherwise be loaded from the `.env` file.
+
+If no command-line values are provided for phone and recipient, the script will use the values specified in the `.env` file.
 
 ## Logging
-The script logs important events and errors to both:
+The script logs important events and errors to:
 - **Console Output:** For real-time monitoring.
-- **Log File:** `morning_message.log` in the project directory for persistent record keeping.
+- **Log File:** `morning_message.log` in the project directory, for persistent logging.
 
 ## Notes
-- Ensure your OpenAI API key has access to the required model.
+- Ensure your OpenAI API key has the appropriate access rights for the desired model.
 - WhatsApp Web must be active and logged in for pywhatkit to send messages successfully.
 
 ## Developed by Jas Jassar
