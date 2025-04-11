@@ -1,6 +1,7 @@
 #Project log files
 PyWhatKit_DB.txt
 morning_message.log
+messaging_config.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

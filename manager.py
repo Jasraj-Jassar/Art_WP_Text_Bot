@@ -95,6 +95,7 @@ def main():
     try:
         for proc in processes:
             proc.wait()
+            print(f"Process for Contact {idx + 1} has ended.")
     except KeyboardInterrupt:
         print("\nInterrupt received, terminating all messaging processes...")
         for proc in processes:
