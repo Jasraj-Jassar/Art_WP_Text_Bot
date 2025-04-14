@@ -156,6 +156,236 @@ def display_upcoming_schedules(scheduler):
     
     print("\n=======================================")
 
+def display_schedule_menu():
+    """Display schedule management menu"""
+    print("\n===== SCHEDULE MANAGEMENT =====")
+    print("1) View all contacts")
+    print("2) Add new contact")
+    print("3) Edit existing contact")
+    print("4) Remove contact")
+    print("5) Start scheduler")
+    print("0) Exit")
+    print("=============================")
+    return input("Enter your choice: ").strip()
+
+def display_all_contacts(scheduler):
+    """Display all contacts in the schedule"""
+    schedules = scheduler.get_all_schedules()
+    if not schedules:
+        print("\nNo contacts scheduled.")
+        return
+    
+    print("\n===== SCHEDULED CONTACTS =====")
+    for i, (schedule_id, schedule) in enumerate(schedules.items(), 1):
+        weekdays_str = ", ".join(day.capitalize() for day in schedule['weekdays'])
+        print(f"{i}) {schedule_id}: {schedule['recipient']} - {schedule['phone']}")
+        print(f"   Schedule: Every {weekdays_str} at {schedule['hour']:02d}:{schedule['minute']:02d}")
+    print("=============================")
+
+def add_new_contact(scheduler):
+    """Add a new contact to the schedule"""
+    print("\n----- Add New Contact -----")
+    
+    # Get next available ID
+    existing_ids = list(scheduler.get_all_schedules().keys())
+    if existing_ids:
+        # Find the highest contact_X number
+        contact_nums = [int(id.split('_')[1]) for id in existing_ids if id.startswith('contact_')]
+        next_id = max(contact_nums) + 1 if contact_nums else 1
+    else:
+        next_id = 1
+    
+    schedule_id = f"contact_{next_id}"
+    
+    # Get contact information
+    phone = input("Phone number: ").strip()
+    recipient = input("Recipient name: ").strip()
+    
+    try:
+        hour = int(input("Scheduled Hour (24-hour format): ").strip())
+        minute = int(input("Scheduled Minute: ").strip())
+        
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            print("Invalid time. Hour must be 0-23, minute must be 0-59.")
+            return
+    except ValueError:
+        print("Invalid input for hour or minute.")
+        return
+    
+    # Get weekdays
+    print("Note: Messages will automatically repeat every week on the selected days.")
+    weekdays = get_weekdays_from_user()
+    
+    if not weekdays:
+        print("No valid weekdays selected. Using default (Monday).")
+        weekdays = ['monday']
+    
+    # Add schedule
+    scheduler.add_schedule(
+        schedule_id=schedule_id,
+        phone=phone,
+        recipient=recipient,
+        hour=hour,
+        minute=minute,
+        weekdays=weekdays
+    )
+    
+    weekdays_str = ", ".join(day.capitalize() for day in weekdays)
+    print(f"\nContact added: {recipient}")
+    print(f"Schedule: Every {weekdays_str} at {hour:02d}:{minute:02d}")
+
+def edit_contact(scheduler):
+    """Edit an existing contact in the schedule"""
+    display_all_contacts(scheduler)
+    schedules = scheduler.get_all_schedules()
+    
+    if not schedules:
+        return
+    
+    # Create a mapping of displayed numbers to schedule IDs
+    id_map = {i: schedule_id for i, schedule_id in enumerate(schedules.keys(), 1)}
+    
+    try:
+        choice = int(input("\nEnter the number of the contact to edit (0 to cancel): "))
+        if choice == 0:
+            return
+        
+        if choice not in id_map:
+            print("Invalid choice.")
+            return
+        
+        schedule_id = id_map[choice]
+        schedule = scheduler.get_schedule(schedule_id)
+        
+        print(f"\nEditing contact: {schedule['recipient']}")
+        print("Leave fields blank to keep existing values.\n")
+        
+        # Phone
+        new_phone = input(f"Phone number [{schedule['phone']}]: ").strip()
+        if not new_phone:
+            new_phone = schedule['phone']
+        
+        # Recipient
+        new_recipient = input(f"Recipient name [{schedule['recipient']}]: ").strip()
+        if not new_recipient:
+            new_recipient = schedule['recipient']
+        
+        # Hour
+        new_hour = input(f"Hour (24-hour format) [{schedule['hour']}]: ").strip()
+        if new_hour:
+            try:
+                new_hour = int(new_hour)
+                if new_hour < 0 or new_hour > 23:
+                    print("Invalid hour. Using previous value.")
+                    new_hour = schedule['hour']
+            except ValueError:
+                print("Invalid input. Using previous value.")
+                new_hour = schedule['hour']
+        else:
+            new_hour = schedule['hour']
+        
+        # Minute
+        new_minute = input(f"Minute [{schedule['minute']}]: ").strip()
+        if new_minute:
+            try:
+                new_minute = int(new_minute)
+                if new_minute < 0 or new_minute > 59:
+                    print("Invalid minute. Using previous value.")
+                    new_minute = schedule['minute']
+            except ValueError:
+                print("Invalid input. Using previous value.")
+                new_minute = schedule['minute']
+        else:
+            new_minute = schedule['minute']
+        
+        # Weekdays
+        print(f"Current weekdays: {', '.join(day.capitalize() for day in schedule['weekdays'])}")
+        change_weekdays = input("Change weekdays? (y/n): ").lower().strip() == 'y'
+        
+        if change_weekdays:
+            new_weekdays = get_weekdays_from_user()
+            if not new_weekdays:
+                print("No valid weekdays selected. Using previous values.")
+                new_weekdays = schedule['weekdays']
+        else:
+            new_weekdays = schedule['weekdays']
+        
+        # Update schedule
+        scheduler.add_schedule(
+            schedule_id=schedule_id,
+            phone=new_phone,
+            recipient=new_recipient,
+            hour=new_hour,
+            minute=new_minute,
+            weekdays=new_weekdays
+        )
+        
+        weekdays_str = ", ".join(day.capitalize() for day in new_weekdays)
+        print(f"\nContact updated: {new_recipient}")
+        print(f"Schedule: Every {weekdays_str} at {new_hour:02d}:{new_minute:02d}")
+        
+    except ValueError:
+        print("Invalid input.")
+
+def remove_contact(scheduler):
+    """Remove a contact from the schedule"""
+    display_all_contacts(scheduler)
+    schedules = scheduler.get_all_schedules()
+    
+    if not schedules:
+        return
+    
+    # Create a mapping of displayed numbers to schedule IDs
+    id_map = {i: schedule_id for i, schedule_id in enumerate(schedules.keys(), 1)}
+    
+    try:
+        choice = int(input("\nEnter the number of the contact to remove (0 to cancel): "))
+        if choice == 0:
+            return
+        
+        if choice not in id_map:
+            print("Invalid choice.")
+            return
+        
+        schedule_id = id_map[choice]
+        schedule = scheduler.get_schedule(schedule_id)
+        
+        confirm = input(f"Are you sure you want to remove {schedule['recipient']}? (y/n): ").lower().strip() == 'y'
+        if confirm:
+            scheduler.remove_schedule(schedule_id)
+            print(f"\nContact {schedule['recipient']} removed successfully.")
+        else:
+            print("Operation cancelled.")
+        
+    except ValueError:
+        print("Invalid input.")
+
+def manage_schedules(scheduler, process_manager):
+    """Main schedule management function"""
+    while True:
+        choice = display_schedule_menu()
+        
+        if choice == '1':
+            display_all_contacts(scheduler)
+        elif choice == '2':
+            add_new_contact(scheduler)
+        elif choice == '3':
+            edit_contact(scheduler)
+        elif choice == '4':
+            remove_contact(scheduler)
+        elif choice == '5':
+            # Start the scheduler
+            print("\nStarting scheduler...")
+            display_upcoming_schedules(scheduler)
+            print("Press Ctrl+C to exit and stop all processes.\n")
+            run_scheduler(scheduler, process_manager)
+            return
+        elif choice == '0':
+            print("Exiting...")
+            sys.exit(0)
+        else:
+            print("Invalid choice. Please try again.")
+
 def main():
     # Configure logging
     logging.basicConfig(
@@ -174,80 +404,8 @@ def main():
     scheduler = MessageScheduler()
     process_manager = ProcessManager()
     
-    # Check if there are existing schedules
-    existing_schedules = scheduler.get_all_schedules()
-    if existing_schedules:
-        print(f"\nFound {len(existing_schedules)} existing schedule(s):")
-        for schedule_id, schedule in existing_schedules.items():
-            weekdays_str = ", ".join(day.capitalize() for day in schedule['weekdays'])
-            print(f"  {schedule_id}: {schedule['recipient']} - Every {weekdays_str} at {schedule['hour']:02d}:{schedule['minute']:02d}")
-        
-        use_existing = input("\nUse existing schedules? (y/n): ").lower().strip()
-        if use_existing == 'y':
-            logger.info("Using existing schedules")
-            print("\nUsing existing schedules. Starting the scheduler...")
-            
-            # Display upcoming schedules
-            display_upcoming_schedules(scheduler)
-            
-            print("Press Ctrl+C to exit and stop all processes.\n")
-            run_scheduler(scheduler, process_manager)
-            return
-    
-    # Prompt for the number of contacts
-    try:
-        num_contacts = int(input("Enter the number of contacts: "))
-        logger.info(f"User entered {num_contacts} contacts")
-    except ValueError:
-        logger.error("Invalid number entered. Exiting.")
-        print("Invalid number entered. Exiting.")
-        sys.exit(1)
-    
-    # Collect details for each contact
-    for i in range(num_contacts):
-        print(f"\nContact {i + 1} details:")
-        phone = input("  Phone number: ").strip()
-        recipient = input("  Recipient name: ").strip()
-        try:
-            hour = int(input("  Scheduled Hour (24-hour format): ").strip())
-            minute = int(input("  Scheduled Minute: ").strip())
-        except ValueError:
-            logger.error("Invalid input for hour or minute. Exiting.")
-            print("Invalid input for hour or minute. Exiting.")
-            sys.exit(1)
-            
-        # Get weekdays using the new helper function
-        print("  Note: Messages will automatically repeat every week on the selected days.")
-        weekdays = get_weekdays_from_user()
-        
-        if not weekdays:
-            logger.warning("No valid weekdays selected. Using default (Monday).")
-            print("  No valid weekdays selected. Using default (Monday).")
-            weekdays = ['monday']
-        
-        # Add schedule to the scheduler
-        schedule_id = f"contact_{i+1}"
-        scheduler.add_schedule(
-            schedule_id=schedule_id,
-            phone=phone,
-            recipient=recipient,
-            hour=hour,
-            minute=minute,
-            weekdays=weekdays
-        )
-        logger.info(f"Added schedule {schedule_id} for {recipient} on {', '.join(weekdays)} at {hour:02d}:{minute:02d}")
-        
-        # Confirm schedule
-        weekdays_str = ", ".join(day.capitalize() for day in weekdays)
-        print(f"\n  Schedule created: Every {weekdays_str} at {hour:02d}:{minute:02d}")
-    
-    print("\nAll schedules have been saved. Starting the scheduler...")
-    
-    # Display upcoming schedules
-    display_upcoming_schedules(scheduler)
-    
-    print("Press Ctrl+C to exit and stop all processes.\n")
-    run_scheduler(scheduler, process_manager)
+    # Always go to schedule management instead of the old workflow
+    manage_schedules(scheduler, process_manager)
 
 def run_scheduler(scheduler, process_manager):
     """Run the scheduler continuously"""
