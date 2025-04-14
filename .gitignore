@@ -2,6 +2,7 @@
 PyWhatKit_DB.txt
 morning_message.log
 messaging_config.json
+message_schedules.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
