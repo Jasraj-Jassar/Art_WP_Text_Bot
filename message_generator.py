@@ -52,7 +52,7 @@ def fetch_good_morning_text(api_key, recipient_name):
         logging.info("Successfully fetched the morning text.")
         
         # Add the permanent greeting
-        final_message = f"Доброго ранку {recipient_name}, {raw_message}"
+        final_message = f"Good Morrow {recipient_name}, {raw_message}"
         update_last_prompts(raw_message)
         return final_message
     except Exception as e:
