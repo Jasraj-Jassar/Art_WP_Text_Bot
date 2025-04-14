@@ -1,832 +1,728 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
 import sys
+import time
+import json
+import logging
 import subprocess
 import threading
-import time
-import os
-from datetime import datetime
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                            QHBoxLayout, QGridLayout, QLabel, QPushButton, 
-                            QTextEdit, QScrollArea, QFrame, QDialog, 
-                            QLineEdit, QSpinBox, QMessageBox, QFormLayout)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QFontDatabase
+from datetime import datetime, timedelta
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QPushButton, QLabel, QListWidget, QListWidgetItem, QMessageBox,
+    QDialog, QLineEdit, QTimeEdit, QCheckBox, QTabWidget, QTextEdit,
+    QGroupBox, QFormLayout, QSpinBox, QComboBox
+)
+from PyQt6.QtCore import Qt, QTime, QTimer, pyqtSignal
 
-class ProcessSignals(QObject):
-    """Defines the signals available for communicating with the GUI thread."""
-    output = pyqtSignal(str, str)  # (contact_id, output_text)
-    finished = pyqtSignal(str)     # contact_id
+# Import the message scheduler from manager.py
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from manager import MessageScheduler
+
+# Constants
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+LOG_LEVELS = {
+    "INFO": "blue",
+    "SUCCESS": "green",
+    "WARNING": "orange",
+    "ERROR": "red",
+    "DEBUG": "gray"
+}
+
+class ConsoleOutput(QTextEdit):
+    """Widget to display console-like output."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setStyleSheet("font-family: monospace; background-color: #f0f0f0;")
+        
+    def append_log(self, message, level="INFO"):
+        """Append a log message with timestamp and level-based coloring."""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        color = LOG_LEVELS.get(level, "black")
+        formatted_msg = f'<span style="color:gray;">[{timestamp}]</span> <span style="color:{color};"><b>[{level}]</b></span> {message}'
+        self.append(formatted_msg)
+        # Auto-scroll to bottom
+        scrollbar = self.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
 class ProcessWorker(threading.Thread):
-    """Worker thread to handle a subprocess and emit its output."""
-    def __init__(self, contact_id, command, signals):
+    """Thread for running external processes."""
+    
+    def __init__(self, command, signals, contact_id=None, contact_data=None):
         super().__init__()
-        self.contact_id = contact_id
         self.command = command
-        self.signals = signals
         self.process = None
-        self.daemon = True
-        self.stop_event = threading.Event()
+        self.signals = signals
+        self.contact_id = contact_id
+        self.contact_data = contact_data
+        self.running = True
+        self.daemon = True  # Thread will exit when main program exits
         
     def run(self):
+        """Run the process and capture output."""
         try:
-            # Start the process
             self.process = subprocess.Popen(
                 self.command,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,  # Line buffered
+                universal_newlines=True
+            )
+            
+            # Process output line by line
+            for line in iter(self.process.stdout.readline, ''):
+                if not self.running:
+                    break
+                # Remove trailing newline
+                line = line.rstrip()
+                if line:
+                    self.signals["output"].emit(line.strip(), "INFO")
+            
+            # Process has completed
+            if self.process.poll() is not None:
+                exit_code = self.process.returncode
+                if exit_code == 0:
+                    self.signals["output"].emit(f"Process completed successfully", "SUCCESS")
+                else:
+                    self.signals["output"].emit(f"Process exited with code {exit_code}", "ERROR")
+                
+        except Exception as e:
+            self.signals["output"].emit(f"Error running process: {str(e)}", "ERROR")
+        finally:
+            self.signals["finished"].emit()
+            
+    def stop(self):
+        """Stop the running process."""
+        self.running = False
+        if self.process:
+            try:
+                self.process.terminate()
+                # Give it a moment to terminate
+                time.sleep(0.5)
+                # If still running, force kill
+                if self.process.poll() is None:
+                    self.process.kill()
+            except Exception as e:
+                print(f"Error stopping process: {e}")
+                
+class ContactDialog(QDialog):
+    """Dialog for adding or editing a contact."""
+    
+    def __init__(self, schedule=None, parent=None):
+        super().__init__(parent)
+        self.schedule = schedule
+        self.init_ui()
+        
+    def init_ui(self):
+        """Initialize the UI components."""
+        is_edit = self.schedule is not None
+        self.setWindowTitle(f"{'Edit' if is_edit else 'Add'} Contact")
+        self.setMinimumWidth(400)
+        
+        layout = QVBoxLayout()
+        
+        # Form layout for inputs
+        form_layout = QFormLayout()
+        
+        # Phone number input
+        self.phone_input = QLineEdit()
+        if is_edit:
+            self.phone_input.setText(self.schedule.get('phone', ''))
+        form_layout.addRow("Phone Number:", self.phone_input)
+        
+        # Recipient name input
+        self.recipient_input = QLineEdit()
+        if is_edit:
+            self.recipient_input.setText(self.schedule.get('recipient', ''))
+        form_layout.addRow("Recipient Name:", self.recipient_input)
+        
+        # Time scheduling
+        time_layout = QHBoxLayout()
+        
+        # Hour input
+        self.hour_input = QSpinBox()
+        self.hour_input.setRange(0, 23)
+        if is_edit:
+            self.hour_input.setValue(int(self.schedule.get('hour', 9)))
+        else:
+            self.hour_input.setValue(9)  # Default to 9 AM
+        
+        # Minute input
+        self.minute_input = QSpinBox()
+        self.minute_input.setRange(0, 59)
+        self.minute_input.setSingleStep(5)
+        if is_edit:
+            self.minute_input.setValue(int(self.schedule.get('minute', 0)))
+        
+        time_layout.addWidget(QLabel("Hour:"))
+        time_layout.addWidget(self.hour_input)
+        time_layout.addWidget(QLabel("Minute:"))
+        time_layout.addWidget(self.minute_input)
+        form_layout.addRow("Scheduled Time:", time_layout)
+        
+        # Weekday selection
+        weekday_group = QGroupBox("Scheduled Days")
+        weekday_layout = QVBoxLayout()
+        
+        # Weekday checkboxes
+        self.weekday_checkboxes = []
+        for day in WEEKDAYS:
+            checkbox = QCheckBox(day)
+            if is_edit and 'weekdays' in self.schedule:
+                checkbox.setChecked(day.lower() in self.schedule['weekdays'])
+            self.weekday_checkboxes.append(checkbox)
+            weekday_layout.addWidget(checkbox)
+            
+        # Quick selection buttons
+        quick_select_layout = QHBoxLayout()
+        
+        weekdays_btn = QPushButton("Weekdays")
+        weekdays_btn.clicked.connect(self.select_weekdays)
+        quick_select_layout.addWidget(weekdays_btn)
+        
+        weekend_btn = QPushButton("Weekend")
+        weekend_btn.clicked.connect(self.select_weekend)
+        quick_select_layout.addWidget(weekend_btn)
+        
+        all_days_btn = QPushButton("All Days")
+        all_days_btn.clicked.connect(self.select_all_days)
+        quick_select_layout.addWidget(all_days_btn)
+        
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(self.clear_selection)
+        quick_select_layout.addWidget(clear_btn)
+        
+        weekday_layout.addLayout(quick_select_layout)
+        weekday_group.setLayout(weekday_layout)
+        
+        # Add everything to the main layout
+        layout.addLayout(form_layout)
+        layout.addWidget(weekday_group)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        
+        button_layout.addWidget(save_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+        
+    def select_weekdays(self):
+        """Select weekdays (Monday-Friday)."""
+        for i, checkbox in enumerate(self.weekday_checkboxes):
+            checkbox.setChecked(i < 5)  # Monday-Friday are indexes 0-4
+            
+    def select_weekend(self):
+        """Select weekend days (Saturday-Sunday)."""
+        for i, checkbox in enumerate(self.weekday_checkboxes):
+            checkbox.setChecked(i >= 5)  # Saturday-Sunday are indexes 5-6
+            
+    def select_all_days(self):
+        """Select all days."""
+        for checkbox in self.weekday_checkboxes:
+            checkbox.setChecked(True)
+            
+    def clear_selection(self):
+        """Clear all day selections."""
+        for checkbox in self.weekday_checkboxes:
+            checkbox.setChecked(False)
+            
+    def get_values(self):
+        """Get the values from the form."""
+        # Get selected weekdays
+        weekdays = []
+        for i, checkbox in enumerate(self.weekday_checkboxes):
+            if checkbox.isChecked():
+                weekdays.append(WEEKDAYS[i].lower())
+                
+        return {
+            'phone': self.phone_input.text(),
+            'recipient': self.recipient_input.text(),
+            'hour': self.hour_input.value(),
+            'minute': self.minute_input.value(),
+            'weekdays': weekdays
+        }
+
+class SchedulerGUI(QMainWindow):
+    """Main GUI window for managing message schedules."""
+    
+    # Define signals for process communication
+    output_signal = pyqtSignal(str, str)
+    process_finished = pyqtSignal()
+    
+    def __init__(self):
+        super().__init__()
+        
+        # Initialize the scheduler
+        self.scheduler = MessageScheduler()
+        
+        # Initialize process worker
+        self.process_worker = None
+        
+        # Set up signals
+        self.output_signal.connect(self.update_console)
+        self.process_finished.connect(self.on_process_finished)
+        
+        # Set up the UI
+        self.init_ui()
+        
+        # Load existing schedules
+        self.load_schedules()
+        
+        # Set up timer for updating upcoming schedules
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_upcoming_schedules)
+        self.update_timer.start(60000)  # Update every minute
+        self.update_upcoming_schedules()  # Initial update
+        
+    def init_ui(self):
+        """Initialize the UI components."""
+        self.setWindowTitle("Message Scheduler")
+        self.setMinimumSize(700, 500)
+        
+        # Central widget and layout
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        
+        # Create tabs
+        tabs = QTabWidget()
+        
+        # Manage tab
+        manage_tab = QWidget()
+        manage_layout = QVBoxLayout(manage_tab)
+        
+        # Contacts list
+        contacts_group = QGroupBox("Contacts")
+        contacts_layout = QVBoxLayout()
+        
+        self.contact_list = QListWidget()
+        contacts_layout.addWidget(self.contact_list)
+        
+        # Contact buttons
+        contact_buttons = QHBoxLayout()
+        
+        add_btn = QPushButton("Add Contact")
+        add_btn.clicked.connect(self.add_contact)
+        contact_buttons.addWidget(add_btn)
+        
+        edit_btn = QPushButton("Edit Contact")
+        edit_btn.clicked.connect(self.edit_contact)
+        contact_buttons.addWidget(edit_btn)
+        
+        remove_btn = QPushButton("Remove Contact")
+        remove_btn.clicked.connect(self.remove_contact)
+        contact_buttons.addWidget(remove_btn)
+        
+        contacts_layout.addLayout(contact_buttons)
+        contacts_group.setLayout(contacts_layout)
+        manage_layout.addWidget(contacts_group)
+        
+        # Upcoming schedules
+        upcoming_group = QGroupBox("Upcoming Schedules")
+        upcoming_layout = QVBoxLayout()
+        
+        self.upcoming_text = QTextEdit()
+        self.upcoming_text.setReadOnly(True)
+        upcoming_layout.addWidget(self.upcoming_text)
+        
+        upcoming_group.setLayout(upcoming_layout)
+        manage_layout.addWidget(upcoming_group)
+        
+        # Scheduler control
+        control_layout = QHBoxLayout()
+        
+        self.run_btn = QPushButton("Start Scheduler")
+        self.run_btn.clicked.connect(self.run_scheduler)
+        control_layout.addWidget(self.run_btn)
+        
+        self.stop_btn = QPushButton("Stop Scheduler")
+        self.stop_btn.clicked.connect(self.stop_scheduler)
+        self.stop_btn.setEnabled(False)
+        control_layout.addWidget(self.stop_btn)
+        
+        manage_layout.addLayout(control_layout)
+        
+        # Console tab
+        console_tab = QWidget()
+        console_layout = QVBoxLayout(console_tab)
+        
+        self.console = ConsoleOutput()
+        console_layout.addWidget(self.console)
+        
+        # Add tabs
+        tabs.addTab(manage_tab, "Manage Contacts")
+        tabs.addTab(console_tab, "Console Output")
+        
+        main_layout.addWidget(tabs)
+        
+        # Add console message about startup
+        self.console.append_log("Message Scheduler GUI started", "INFO")
+        self.console.append_log("Use the 'Manage Contacts' tab to set up schedules", "INFO")
+        self.console.append_log("Use 'Start Scheduler' to begin sending messages", "INFO")
+        
+    def load_schedules(self):
+        """Load existing schedules into the contact list."""
+        self.contact_list.clear()
+        
+        schedules = self.scheduler.get_all_schedules()
+        if not schedules:
+            self.console.append_log("No schedules found", "INFO")
+            return
+            
+        for schedule_id, schedule in schedules.items():
+            item = QListWidgetItem()
+            weekdays_str = ", ".join(day.capitalize() for day in schedule.get('weekdays', []))
+            item.setText(f"{schedule['recipient']} - {int(schedule['hour']):02d}:{int(schedule['minute']):02d} - {weekdays_str}")
+            item.setData(Qt.ItemDataRole.UserRole, schedule_id)
+            self.contact_list.addItem(item)
+            
+        self.console.append_log(f"Loaded {len(schedules)} contact(s)", "INFO")
+        
+    def update_upcoming_schedules(self):
+        """Update the upcoming schedules display."""
+        schedules = self.scheduler.get_all_schedules()
+        if not schedules:
+            self.upcoming_text.setPlainText("No scheduled messages.")
+            return
+            
+        # Get next 24 hours of schedules
+        now = datetime.now()
+        end_time = now + timedelta(days=1)
+        
+        # Collect upcoming schedules
+        upcoming = []
+        for schedule_id, schedule in schedules.items():
+            next_run = self._calculate_next_run_time(schedule)
+            if next_run and next_run <= end_time:
+                upcoming.append((next_run, schedule_id, schedule))
+                
+        # Sort by next run time
+        upcoming.sort(key=lambda x: x[0])
+        
+        # Format for display
+        text = []
+        for next_run, schedule_id, schedule in upcoming:
+            time_str = next_run.strftime("%a %I:%M %p")
+            text.append(f"• {time_str} - {schedule['recipient']}")
+            
+        if not text:
+            text = ["No messages scheduled in the next 24 hours."]
+            
+        self.upcoming_text.setPlainText("\n".join(text))
+        
+    def _calculate_next_run_time(self, schedule):
+        """Calculate the next time a schedule will run."""
+        # Get current time
+        now = datetime.now()
+        
+        # Get weekdays from schedule
+        weekdays = schedule.get('weekdays', [])
+        if not weekdays:
+            return None
+        
+        # Get time from schedule
+        hour = int(schedule.get('hour', 0))
+        minute = int(schedule.get('minute', 0))
+        
+        # Map weekday names to numbers (0=Monday, 6=Sunday)
+        weekday_map = {day.lower(): i for i, day in enumerate(WEEKDAYS)}
+        weekday_nums = [weekday_map[day] for day in weekdays if day in weekday_map]
+        if not weekday_nums:
+            return None
+        
+        # Calculate the next occurrence
+        # Start with today
+        current_weekday = now.weekday()  # 0=Monday, 6=Sunday
+        
+        # Check if we can run later today
+        if current_weekday in weekday_nums:
+            target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target_time > now:
+                return target_time
+            
+        # Find the next weekday that matches
+        for days_ahead in range(1, 8):  # Look ahead up to a week
+            next_day = (current_weekday + days_ahead) % 7
+            if next_day in weekday_nums:
+                # Calculate the date
+                target_date = now + timedelta(days=days_ahead)
+                return target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            
+        return None
+        
+    def ensure_scheduler_stopped(self):
+        """Make sure the scheduler is stopped before making changes."""
+        if hasattr(self, 'process') and self.process is not None and self.process.poll() is None:
+            self.console.append_log("Stopping scheduler to make changes...", "WARNING")
+            try:
+                self.process.terminate()
+                # Give a moment for the process to terminate
+                for _ in range(10):  # Wait up to 1 second
+                    if self.process.poll() is not None:
+                        break
+                    time.sleep(0.1)
+                    
+                # If still running, force kill
+                if self.process.poll() is None:
+                    self.process.kill()
+                    
+                self.process = None
+                self.run_btn.setEnabled(True)
+                self.stop_btn.setEnabled(False)
+            except Exception as e:
+                self.console.append_log(f"Error stopping scheduler: {str(e)}", "ERROR")
+                
+            self.console.append_log("Scheduler stopped. Making changes...", "SUCCESS")
+            return True
+        return False
+        
+    def add_contact(self):
+        """Add a new contact."""
+        # Stop the scheduler if it's running
+        was_running = self.ensure_scheduler_stopped()
+        
+        dialog = ContactDialog(parent=self)
+        if dialog.exec():
+            values = dialog.get_values()
+            
+            # Generate schedule ID
+            existing_ids = list(self.scheduler.get_all_schedules().keys())
+            if existing_ids:
+                # Find the highest contact_X number
+                contact_nums = [int(id.split('_')[1]) for id in existing_ids if id.startswith('contact_')]
+                next_id = max(contact_nums) + 1 if contact_nums else 1
+            else:
+                next_id = 1
+                
+            schedule_id = f"contact_{next_id}"
+            
+            # Add to scheduler
+            self.scheduler.add_schedule(
+                schedule_id=schedule_id,
+                phone=values['phone'],
+                recipient=values['recipient'],
+                hour=values['hour'],
+                minute=values['minute'],
+                weekdays=values['weekdays']
+            )
+            
+            self.console.append_log(f"Added contact: {values['recipient']}", "SUCCESS")
+            self.load_schedules()
+            self.update_upcoming_schedules()
+            
+            # Switch back to the manage tab
+            self.centralWidget().findChild(QTabWidget).setCurrentIndex(0)
+            
+            # Restart scheduler if it was running
+            if was_running:
+                self.console.append_log("Restarting scheduler...", "INFO")
+                self.run_scheduler()
+            
+    def edit_contact(self):
+        """Edit selected contact."""
+        # Stop the scheduler if it's running
+        was_running = self.ensure_scheduler_stopped()
+        
+        selected_items = self.contact_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "Warning", "Please select a contact to edit.")
+            return
+            
+        item = selected_items[0]
+        schedule_id = item.data(Qt.ItemDataRole.UserRole)
+        schedule = self.scheduler.get_schedule(schedule_id)
+        
+        if not schedule:
+            QMessageBox.warning(self, "Warning", "Could not find the selected contact.")
+            return
+            
+        dialog = ContactDialog(schedule, parent=self)
+        if dialog.exec():
+            values = dialog.get_values()
+            
+            # Update the schedule
+            self.scheduler.add_schedule(
+                schedule_id=schedule_id,
+                phone=values['phone'],
+                recipient=values['recipient'],
+                hour=values['hour'],
+                minute=values['minute'],
+                weekdays=values['weekdays']
+            )
+            
+            self.console.append_log(f"Updated contact: {values['recipient']}", "SUCCESS")
+            self.load_schedules()
+            self.update_upcoming_schedules()
+            
+            # Switch back to the manage tab
+            self.centralWidget().findChild(QTabWidget).setCurrentIndex(0)
+            
+            # Restart scheduler if it was running
+            if was_running:
+                self.console.append_log("Restarting scheduler...", "INFO")
+                self.run_scheduler()
+            
+    def remove_contact(self):
+        """Remove the selected contact."""
+        # Stop the scheduler if it's running
+        was_running = self.ensure_scheduler_stopped()
+        
+        selected_items = self.contact_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "Warning", "Please select a contact to remove.")
+            return
+            
+        item = selected_items[0]
+        schedule_id = item.data(Qt.ItemDataRole.UserRole)
+        schedule = self.scheduler.get_schedule(schedule_id)
+        
+        if not schedule:
+            QMessageBox.warning(self, "Warning", "Could not find the selected contact.")
+            return
+            
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Removal",
+            f"Are you sure you want to remove {schedule['recipient']}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if confirm == QMessageBox.StandardButton.Yes:
+            self.scheduler.remove_schedule(schedule_id)
+            self.console.append_log(f"Removed contact: {schedule['recipient']}", "WARNING")
+            self.load_schedules()
+            self.update_upcoming_schedules()
+            
+            # Switch back to the manage tab
+            self.centralWidget().findChild(QTabWidget).setCurrentIndex(0)
+            
+            # Restart scheduler if it was running
+            if was_running:
+                self.console.append_log("Restarting scheduler...", "INFO")
+                self.run_scheduler()
+            
+    def run_scheduler(self):
+        """Run the scheduler process."""
+        if self.process_worker and self.process_worker.is_alive():
+            self.console.append_log("Scheduler is already running", "WARNING")
+            return
+            
+        # Create and start the process worker
+        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manager.py")
+        
+        # The standard "--run" argument shows the menu
+        command = [sys.executable, script_path, "--run"]
+        
+        # Create a subprocess that we can communicate with
+        try:
+            self.process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
                 universal_newlines=True
             )
             
-            # Read stdout
-            for line in iter(self.process.stdout.readline, ''):
-                if self.stop_event.is_set():
-                    break
-                if line:
-                    self.signals.output.emit(self.contact_id, f"[STDOUT] {line.strip()}")
+            # Start a thread to handle process output
+            def read_output():
+                for line in iter(self.process.stdout.readline, ''):
+                    line = line.rstrip()
+                    if line:
+                        self.output_signal.emit(line.strip(), "INFO")
+                self.process_finished.emit()
             
-            # Read stderr
-            for line in iter(self.process.stderr.readline, ''):
-                if self.stop_event.is_set():
-                    break
-                if line:
-                    self.signals.output.emit(self.contact_id, f"[STDERR] {line.strip()}")
+            threading.Thread(target=read_output, daemon=True).start()
             
-            # Process completed
-            return_code = self.process.wait()
-            if return_code:
-                self.signals.output.emit(
-                    self.contact_id, 
-                    f"Process exited with return code {return_code}"
-                )
+            # Wait a moment for the menu to appear, then send "5" to start the scheduler
+            time.sleep(0.5)
+            self.process.stdin.write("5\n")
+            self.process.stdin.flush()
+            
+            self.run_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+            
+            # Switch to console tab to show output
+            self.centralWidget().findChild(QTabWidget).setCurrentIndex(1)
+            self.console.append_log("Started scheduler process", "SUCCESS")
             
         except Exception as e:
-            self.signals.output.emit(self.contact_id, f"Error: {str(e)}")
-        finally:
-            self.signals.finished.emit(self.contact_id)
-    
-    def stop(self):
-        """Stop the process."""
-        self.stop_event.set()
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-
-class ContactCard(QFrame):
-    """Widget representing a contact card in the GUI."""
-    def __init__(self, contact_id, contact_data, parent=None):
-        super().__init__(parent)
-        self.contact_id = contact_id
-        self.contact_data = contact_data
-        self.process_worker = None
-        self.process_signals = ProcessSignals()
-        self.is_running = False
+            self.console.append_log(f"Error starting scheduler: {str(e)}", "ERROR")
         
-        # Connect signals
-        self.process_signals.output.connect(self.update_output)
-        self.process_signals.finished.connect(self.process_finished)
-        
-        self.setup_ui()
-        
-    def setup_ui(self):
-        """Set up the UI components of the card."""
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setStyleSheet("""
-            ContactCard {
-                background-color: #ffffff;
-                border-radius: 16px;
-                border: none;
-            }
-            QLabel#nameLabel {
-                font-weight: 600;
-                font-size: 18px;
-                color: #1a1a2e;
-            }
-            QLabel#detailLabel {
-                color: #4a4a6a;
-                font-size: 13px;
-            }
-            QLabel#statusRunning {
-                color: #10b981;
-                font-weight: 500;
-            }
-            QLabel#statusIdle {
-                color: #6b7280;
-                font-weight: 500;
-            }
-            QTextEdit {
-                background-color: #f8fafc;
-                border: none;
-                border-radius: 8px;
-                padding: 8px;
-                font-family: 'Consolas', monospace;
-                font-size: 13px;
-                color: #334155;
-            }
-            QPushButton {
-                background-color: #f1f5f9;
-                color: #334155;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 8px;
-                font-weight: 500;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #e2e8f0;
-            }
-            QPushButton:pressed {
-                background-color: #cbd5e1;
-            }
-            QPushButton:disabled {
-                background-color: #e2e8f0;
-                color: #94a3b8;
-            }
-            QPushButton#primaryButton {
-                background-color: #3b82f6;
-                color: white;
-            }
-            QPushButton#primaryButton:hover {
-                background-color: #2563eb;
-            }
-            QPushButton#primaryButton:pressed {
-                background-color: #1d4ed8;
-            }
-            QPushButton#dangerButton {
-                background-color: #ef4444;
-                color: white;
-            }
-            QPushButton#dangerButton:hover {
-                background-color: #dc2626;
-            }
-            QPushButton#dangerButton:pressed {
-                background-color: #b91c1c;
-            }
-        """)
-        
-        # Add drop shadow effect
-        self.setGraphicsEffect(None)  # Clear any existing effect
-        
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(24, 24, 24, 24)
-        main_layout.setSpacing(16)
-        
-        # Header with contact name
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(12)
-        
-        self.name_label = QLabel(self.contact_data['recipient'])
-        self.name_label.setObjectName("nameLabel")
-        header_layout.addWidget(self.name_label)
-        
-        self.status_label = QLabel("Idle")
-        self.status_label.setObjectName("statusIdle")
-        header_layout.addWidget(self.status_label)
-        
-        header_layout.addStretch()
-        main_layout.addLayout(header_layout)
-        
-        # Contact details
-        details_widget = QWidget()
-        details_layout = QVBoxLayout(details_widget)
-        details_layout.setContentsMargins(0, 0, 0, 0)
-        details_layout.setSpacing(4)
-        
-        phone_label = QLabel(f"📱 {self.contact_data['phone']}")
-        phone_label.setObjectName("detailLabel")
-        details_layout.addWidget(phone_label)
-        
-        time_label = QLabel(f"🕒 Scheduled at {self.contact_data['hour']:02d}:{self.contact_data['minute']:02d}")
-        time_label.setObjectName("detailLabel")
-        details_layout.addWidget(time_label)
-        
-        main_layout.addWidget(details_widget)
-        
-        # Output text area
-        self.output_text = QTextEdit()
-        self.output_text.setReadOnly(True)
-        self.output_text.setMinimumHeight(150)
-        self.output_text.setPlaceholderText("Process output will appear here...")
-        main_layout.addWidget(self.output_text)
-        
-        # Control buttons
-        buttons_layout = QHBoxLayout()
-        buttons_layout.setSpacing(12)
-        
-        self.start_button = QPushButton("Start")
-        self.start_button.setObjectName("primaryButton")
-        self.start_button.clicked.connect(self.start_process)
-        buttons_layout.addWidget(self.start_button)
-        
-        self.stop_button = QPushButton("Stop")
-        self.stop_button.setObjectName("dangerButton")
-        self.stop_button.clicked.connect(self.stop_process)
-        self.stop_button.setEnabled(False)
-        buttons_layout.addWidget(self.stop_button)
-        
-        self.edit_button = QPushButton("Edit")
-        self.edit_button.clicked.connect(self.edit_card)
-        buttons_layout.addWidget(self.edit_button)
-        
-        main_layout.addLayout(buttons_layout)
-        
-    def start_process(self):
-        """Start the process for this contact."""
-        if self.process_worker and self.process_worker.is_alive():
+    def stop_scheduler(self):
+        """Stop the scheduler process."""
+        if not hasattr(self, 'process') or self.process is None:
+            self.console.append_log("No scheduler process is running", "WARNING")
             return
             
-        # Clear previous output
-        self.output_text.clear()
-        
-        # Create and start the process worker
-        command = [
-            "python",
-            "api_business_logic.py",
-            "--phone", self.contact_data['phone'],
-            "--recipient", self.contact_data['recipient'],
-            "--hour", str(self.contact_data['hour']),
-            "--minute", str(self.contact_data['minute'])
-        ]
-        
-        self.process_worker = ProcessWorker(self.contact_id, command, self.process_signals)
-        self.process_worker.start()
-        
-        # Update UI
-        self.is_running = True
-        self.status_label.setText("Running")
-        self.status_label.setObjectName("statusRunning")
-        self.status_label.setStyleSheet("")  # Force style refresh
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.output_text.append(f"[{datetime.now().strftime('%H:%M:%S')}] Starting process for {self.contact_data['recipient']}...")
-        
-    def stop_process(self):
-        """Stop the process for this contact."""
-        if self.process_worker and self.process_worker.is_alive():
-            self.output_text.append(f"[{datetime.now().strftime('%H:%M:%S')}] Stopping process...")
-            self.process_worker.stop()
+        self.console.append_log("Stopping scheduler...", "WARNING")
+        try:
+            # Send Ctrl+C signal to terminate the process
+            self.process.terminate()
+            # Give it a moment to terminate
+            time.sleep(0.5)
+            # If still running, force kill
+            if self.process.poll() is None:
+                self.process.kill()
+        except Exception as e:
+            self.console.append_log(f"Error stopping process: {str(e)}", "ERROR")
             
-    def process_finished(self, contact_id):
+        self.process = None
+        self.run_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        
+    def update_console(self, message, level="INFO"):
+        """Update the console with a new message."""
+        self.console.append_log(message, level)
+        
+    def on_process_finished(self):
         """Handle process completion."""
-        if contact_id == self.contact_id:
-            self.is_running = False
-            self.status_label.setText("Idle")
-            self.status_label.setObjectName("statusIdle")
-            self.status_label.setStyleSheet("")  # Force style refresh
-            self.start_button.setEnabled(True)
-            self.stop_button.setEnabled(False)
-            self.output_text.append(f"[{datetime.now().strftime('%H:%M:%S')}] Process finished")
-            
-    def update_output(self, contact_id, text):
-        """Update the output text area with new output."""
-        if contact_id == self.contact_id:
-            timestamp = datetime.now().strftime('%H:%M:%S')
-            
-            # Format the output with colors based on the type
-            if "[STDERR]" in text:
-                self.output_text.append(f"<span style='color:#ef4444;'>[{timestamp}] {text}</span>")
-            else:
-                self.output_text.append(f"<span style='color:#334155;'>[{timestamp}] {text}</span>")
-                
-            # Auto-scroll to bottom
-            scrollbar = self.output_text.verticalScrollBar()
-            scrollbar.setValue(scrollbar.maximum())
-            
-    def edit_card(self):
-        """Open dialog to edit this card's details."""
-        dialog = EditContactDialog(self.contact_data, self.parent())
-        if dialog.exec():
-            new_data = dialog.get_values()
-            self.contact_data = new_data
-            self.name_label.setText(self.contact_data['recipient'])
-            
-            # Update the details display
-            layout = self.layout()
-            details_widget = layout.itemAt(1).widget()
-            details_layout = details_widget.layout()
-            
-            # Update phone and time labels
-            details_layout.itemAt(0).widget().setText(f"📱 {self.contact_data['phone']}")
-            details_layout.itemAt(1).widget().setText(
-                f"🕒 Scheduled at {self.contact_data['hour']:02d}:{self.contact_data['minute']:02d}")
-            
-            self.output_text.append(f"[{datetime.now().strftime('%H:%M:%S')}] Contact details updated")
-
-class EditContactDialog(QDialog):
-    """Dialog for editing or adding a contact."""
-    def __init__(self, contact_data=None, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Edit Contact")
-        self.setMinimumWidth(400)
+        self.run_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.console.append_log("Scheduler process has stopped", "INFO")
         
-        if contact_data is None:
-            contact_data = {
-                'phone': '',
-                'recipient': '',
-                'hour': 12,
-                'minute': 0
-            }
-        
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #ffffff;
-                border-radius: 16px;
-            }
-            QLabel {
-                color: #1a1a2e;
-                font-size: 14px;
-                font-weight: 500;
-            }
-            QLineEdit, QSpinBox {
-                background-color: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 14px;
-                color: #334155;
-            }
-            QLineEdit:focus, QSpinBox:focus {
-                border: 1px solid #3b82f6;
-            }
-            QPushButton {
-                background-color: #f1f5f9;
-                color: #334155;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 8px;
-                font-weight: 500;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #e2e8f0;
-            }
-            QPushButton:pressed {
-                background-color: #cbd5e1;
-            }
-            QPushButton#primaryButton {
-                background-color: #3b82f6;
-                color: white;
-            }
-            QPushButton#primaryButton:hover {
-                background-color: #2563eb;
-            }
-            QPushButton#primaryButton:pressed {
-                background-color: #1d4ed8;
-            }
-        """)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(20)
-        
-        form_layout = QFormLayout()
-        form_layout.setSpacing(16)
-        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
-        
-        # Phone field
-        self.phone_edit = QLineEdit(contact_data['phone'])
-        self.phone_edit.setPlaceholderText("Enter phone number")
-        form_layout.addRow("Phone Number", self.phone_edit)
-        
-        # Recipient field
-        self.recipient_edit = QLineEdit(contact_data['recipient'])
-        self.recipient_edit.setPlaceholderText("Enter recipient name")
-        form_layout.addRow("Recipient Name", self.recipient_edit)
-        
-        # Hour field
-        self.hour_edit = QSpinBox()
-        self.hour_edit.setRange(0, 23)
-        self.hour_edit.setValue(contact_data['hour'])
-        form_layout.addRow("Hour (24h)", self.hour_edit)
-        
-        # Minute field
-        self.minute_edit = QSpinBox()
-        self.minute_edit.setRange(0, 59)
-        self.minute_edit.setValue(contact_data['minute'])
-        form_layout.addRow("Minute", self.minute_edit)
-        
-        layout.addLayout(form_layout)
-        
-        # Buttons
-        buttons_layout = QHBoxLayout()
-        buttons_layout.setSpacing(12)
-        
-        save_button = QPushButton("Save")
-        save_button.setObjectName("primaryButton")
-        save_button.clicked.connect(self.accept)
-        
-        cancel_button = QPushButton("Cancel")
-        cancel_button.clicked.connect(self.reject)
-        
-        buttons_layout.addWidget(save_button)
-        buttons_layout.addWidget(cancel_button)
-        layout.addLayout(buttons_layout)
-        
-    def get_values(self):
-        """Return the values entered in the dialog."""
-        return {
-            'phone': self.phone_edit.text(),
-            'recipient': self.recipient_edit.text(),
-            'hour': self.hour_edit.value(),
-            'minute': self.minute_edit.value()
-        }
-
-class AddContactsDialog(QDialog):
-    """Dialog for adding multiple contacts at once."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add Contacts")
-        self.setMinimumWidth(500)
-        
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #ffffff;
-                border-radius: 16px;
-            }
-            QLabel {
-                color: #1a1a2e;
-                font-size: 14px;
-                font-weight: 500;
-            }
-            QLineEdit, QSpinBox {
-                background-color: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 14px;
-                color: #334155;
-            }
-            QLineEdit:focus, QSpinBox:focus {
-                border: 1px solid #3b82f6;
-            }
-            QPushButton {
-                background-color: #f1f5f9;
-                color: #334155;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 8px;
-                font-weight: 500;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #e2e8f0;
-            }
-            QPushButton:pressed {
-                background-color: #cbd5e1;
-            }
-            QPushButton#primaryButton {
-                background-color: #3b82f6;
-                color: white;
-            }
-            QPushButton#primaryButton:hover {
-                background-color: #2563eb;
-            }
-            QPushButton#primaryButton:pressed {
-                background-color: #1d4ed8;
-            }
-            QFrame {
-                background-color: #f8fafc;
-                border-radius: 12px;
-                padding: 4px;
-            }
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-        """)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(20)
-        
-        # Title
-        title_label = QLabel("Add Multiple Contacts")
-        title_label.setStyleSheet("font-size: 18px; font-weight: 600; margin-bottom: 12px;")
-        layout.addWidget(title_label)
-        
-        # Number of contacts
-        num_layout = QHBoxLayout()
-        num_layout.setSpacing(12)
-        num_layout.addWidget(QLabel("Number of contacts:"))
-        self.num_contacts_spin = QSpinBox()
-        self.num_contacts_spin.setRange(1, 100)
-        self.num_contacts_spin.setValue(1)
-        self.num_contacts_spin.valueChanged.connect(self.update_contact_forms)
-        num_layout.addWidget(self.num_contacts_spin)
-        num_layout.addStretch()
-        layout.addLayout(num_layout)
-        
-        # Scroll area for contact forms
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_content = QWidget()
-        self.scroll_layout = QVBoxLayout(self.scroll_content)
-        self.scroll_layout.setContentsMargins(0, 0, 0, 0)
-        self.scroll_layout.setSpacing(16)
-        self.scroll_area.setWidget(self.scroll_content)
-        layout.addWidget(self.scroll_area)
-        
-        # Buttons
-        buttons_layout = QHBoxLayout()
-        buttons_layout.setSpacing(12)
-        
-        add_button = QPushButton("Add Contacts")
-        add_button.setObjectName("primaryButton")
-        add_button.clicked.connect(self.accept)
-        
-        cancel_button = QPushButton("Cancel")
-        cancel_button.clicked.connect(self.reject)
-        
-        buttons_layout.addWidget(add_button)
-        buttons_layout.addWidget(cancel_button)
-        layout.addLayout(buttons_layout)
-        
-        # Initialize with one contact form
-        self.contact_forms = []
-        self.update_contact_forms(1)
-        
-    def update_contact_forms(self, num_contacts):
-        """Update the number of contact forms displayed."""
-        # Clear existing forms
-        while self.scroll_layout.count():
-            item = self.scroll_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
-        self.contact_forms = []
-        
-        # Add new forms
-        for i in range(num_contacts):
-            group_box = QFrame()
-            group_box.setFrameShape(QFrame.Shape.StyledPanel)
-            group_box.setFrameShadow(QFrame.Shadow.Raised)
-            
-            form_layout = QFormLayout(group_box)
-            form_layout.setContentsMargins(16, 16, 16, 16)
-            form_layout.setSpacing(12)
-            form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-            form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
-            
-            # Add a label for the contact number
-            contact_label = QLabel(f"Contact {i+1}")
-            contact_label.setStyleSheet("font-weight: 600; font-size: 16px; color: #1a1a2e;")
-            form_layout.addRow(contact_label)
-            
-            # Phone field
-            phone_edit = QLineEdit()
-            phone_edit.setPlaceholderText("Enter phone number")
-            form_layout.addRow("Phone Number", phone_edit)
-            
-            # Recipient field
-            recipient_edit = QLineEdit()
-            recipient_edit.setPlaceholderText("Enter recipient name")
-            form_layout.addRow("Recipient Name", recipient_edit)
-            
-            # Hour field
-            hour_edit = QSpinBox()
-            hour_edit.setRange(0, 23)
-            hour_edit.setValue(12)
-            form_layout.addRow("Hour (24h)", hour_edit)
-            
-            # Minute field
-            minute_edit = QSpinBox()
-            minute_edit.setRange(0, 59)
-            minute_edit.setValue(0)
-            form_layout.addRow("Minute", minute_edit)
-            
-            self.scroll_layout.addWidget(group_box)
-            
-            # Store the form fields
-            self.contact_forms.append({
-                'phone': phone_edit,
-                'recipient': recipient_edit,
-                'hour': hour_edit,
-                'minute': minute_edit
-            })
-        
-        # Add a spacer at the end
-        self.scroll_layout.addStretch()
-        
-    def get_values(self):
-        """Return the values entered in all contact forms."""
-        contacts = []
-        for form in self.contact_forms:
-            contacts.append({
-                'phone': form['phone'].text(),
-                'recipient': form['recipient'].text(),
-                'hour': form['hour'].value(),
-                'minute': form['minute'].value()
-            })
-        return contacts
-
-class MessagingGUI(QMainWindow):
-    """Main application window."""
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Messaging Manager")
-        self.resize(1200, 800)
-        self.contacts = {}  # Dictionary to store contact cards
-        
-        # Set application style
-        self.setup_fonts()
-        self.setup_ui()
-        self.check_required_scripts()
-        
-    def setup_fonts(self):
-        """Set up custom fonts for the application."""
-        # Set the application font
-        app_font = QFont("Segoe UI", 10)
-        QApplication.setFont(app_font)
-        
-    def setup_ui(self):
-        """Set up the main UI components."""
-        # Set window style
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #f8fafc;
-            }
-            QScrollArea {
-                background-color: transparent;
-                border: none;
-            }
-            QWidget#centralWidget {
-                background-color: #f8fafc;
-            }
-            QLabel#headerLabel {
-                font-size: 24px;
-                font-weight: 600;
-                color: #1a1a2e;
-            }
-            QPushButton {
-                background-color: #f1f5f9;
-                color: #334155;
-                border: none;
-                padding: 12px 20px;
-                border-radius: 10px;
-                font-weight: 500;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #e2e8f0;
-            }
-            QPushButton:pressed {
-                background-color: #cbd5e1;
-            }
-            QPushButton#primaryButton {
-                background-color: #3b82f6;
-                color: white;
-            }
-            QPushButton#primaryButton:hover {
-                background-color: #2563eb;
-            }
-            QPushButton#primaryButton:pressed {
-                background-color: #1d4ed8;
-            }
-            QPushButton#dangerButton {
-                background-color: #ef4444;
-                color: white;
-            }
-            QPushButton#dangerButton:hover {
-                background-color: #dc2626;
-            }
-            QPushButton#dangerButton:pressed {
-                background-color: #b91c1c;
-            }
-        """)
-        
-        central_widget = QWidget()
-        central_widget.setObjectName("centralWidget")
-        self.setCentralWidget(central_widget)
-        
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(32, 32, 32, 32)
-        main_layout.setSpacing(24)
-        
-        # Header
-        header_layout = QHBoxLayout()
-        header_label = QLabel("Messaging Dashboard")
-        header_label.setObjectName("headerLabel")
-        header_layout.addWidget(header_label)
-        header_layout.addStretch()
-        main_layout.addLayout(header_layout)
-        
-        # Top controls
-        top_controls = QHBoxLayout()
-        top_controls.setSpacing(12)
-        
-        self.start_all_button = QPushButton("Start All")
-        self.start_all_button.setObjectName("primaryButton")
-        self.start_all_button.setMinimumWidth(120)
-        self.start_all_button.clicked.connect(self.start_all_processes)
-        top_controls.addWidget(self.start_all_button)
-        
-        self.stop_all_button = QPushButton("Stop All")
-        self.stop_all_button.setObjectName("dangerButton")
-        self.stop_all_button.setMinimumWidth(120)
-        self.stop_all_button.clicked.connect(self.stop_all_processes)
-        top_controls.addWidget(self.stop_all_button)
-        
-        top_controls.addStretch()
-        
-        self.add_contact_button = QPushButton("Add Contact")
-        self.add_contact_button.setMinimumWidth(120)
-        self.add_contact_button.clicked.connect(self.add_single_contact)
-        top_controls.addWidget(self.add_contact_button)
-        
-        self.add_multiple_button = QPushButton("Add Multiple")
-        self.add_multiple_button.setMinimumWidth(120)
-        self.add_multiple_button.clicked.connect(self.add_multiple_contacts)
-        top_controls.addWidget(self.add_multiple_button)
-        
-        main_layout.addLayout(top_controls)
-        
-        # Contacts grid
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_content = QWidget()
-        self.scroll_content.setStyleSheet("background-color: transparent;")
-        
-        self.grid_layout = QGridLayout(self.scroll_content)
-        self.grid_layout.setContentsMargins(0, 0, 0, 0)
-        self.grid_layout.setSpacing(24)
-        
-        self.scroll_area.setWidget(self.scroll_content)
-        main_layout.addWidget(self.scroll_area)
-        
-        # Empty state message
-        self.empty_label = QLabel("No contacts added yet. Click 'Add Contact' to get started.")
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("color: #64748b; font-size: 16px; margin: 48px 0;")
-        self.grid_layout.addWidget(self.empty_label, 0, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
-        
-    def check_required_scripts(self):
-        """Check if required scripts exist."""
-        if not os.path.exists("api_business_logic.py"):
-            QMessageBox.warning(
-                self, 
-                "Warning", 
-                "api_business_logic.py not found in the current directory. "
-                "This application requires api_business_logic.py to function properly."
-            )
-            
-    def add_contact_card(self, contact_id, contact_data):
-        """Add a new contact card to the grid."""
-        # Remove empty state message if this is the first contact
-        if len(self.contacts) == 0:
-            item = self.grid_layout.itemAtPosition(0, 0)
-            if item and item.widget() == self.empty_label:
-                self.grid_layout.removeWidget(self.empty_label)
-                self.empty_label.hide()
-        
-        # Create the card
-        card = ContactCard(contact_id, contact_data, self)
-        self.contacts[contact_id] = card
-        
-        # Add to grid layout
-        row, col = divmod(len(self.contacts) - 1, 2)
-        self.grid_layout.addWidget(card, row, col)
-        
-    def add_single_contact(self):
-        """Open dialog to add a new contact."""
-        dialog = EditContactDialog(parent=self)
-        if dialog.exec():
-            contact_data = dialog.get_values()
-            # Generate a unique ID
-            contact_id = str(len(self.contacts) + 1)
-            self.add_contact_card(contact_id, contact_data)
-            
-    def add_multiple_contacts(self):
-        """Open dialog to add multiple contacts at once."""
-        dialog = AddContactsDialog(parent=self)
-        if dialog.exec():
-            contacts_data = dialog.get_values()
-            for contact_data in contacts_data:
-                contact_id = str(len(self.contacts) + 1)
-                self.add_contact_card(contact_id, contact_data)
-            
-    def start_all_processes(self):
-        """Start all contact processes."""
-        for contact_id, card in self.contacts.items():
-            card.start_process()
-            
-    def stop_all_processes(self):
-        """Stop all running processes."""
-        for contact_id, card in self.contacts.items():
-            card.stop_process()
-            
     def closeEvent(self, event):
         """Handle window close event."""
-        # Stop all processes before closing
-        self.stop_all_processes()
-        event.accept()
+        if hasattr(self, 'process') and self.process is not None and self.process.poll() is None:
+            confirm = QMessageBox.question(
+                self,
+                "Confirm Exit",
+                "The scheduler is still running. Do you want to stop it and exit?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if confirm == QMessageBox.StandardButton.Yes:
+                self.process.terminate()
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
 
 if __name__ == "__main__":
+    # Set up logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    
+    # Create and run the app
     app = QApplication(sys.argv)
-    window = MessagingGUI()
-    window.show()
+    gui = SchedulerGUI()
+    gui.show()
     sys.exit(app.exec())
