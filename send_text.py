@@ -11,7 +11,7 @@ def send_whatsapp_message(phone_number: str, message: str) -> None:
     """
     try:
         logging.info(f"Sending message to {phone_number}")
-        pywhatkit.sendwhatmsg_instantly(phone_number, message)
+        pywhatkit.sendwhatmsg_instantly(phone_number, message, tab_close=True, close_time=1)
         logging.info("Message sent successfully.")
     except Exception as e:
         logging.error(f"Error sending WhatsApp message: {e}")
